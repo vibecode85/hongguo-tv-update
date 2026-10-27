@@ -4,8 +4,8 @@
   "version_code": 118,
   "version_name": "0.2.117",
   "min_sdk": 23,
-  "size": 19156062,
-  "sha256": "f1b56c42fcd63be179102bbd6a8e8f92a57a278cd1e84c0e59bf14f5e07fbfcf",
+  "size": 19157883,
+  "sha256": "e7061e063bde723ef20585c33738dee5a15e2b5a1ca0dea8e62bee325371540a",
   "download_url": "https://github.com/vibecode85/hongguo-tv/releases/download/v0.2.117/hongguo-tv-0.2.117.apk",
   "release_notes": "小米电视4 / Redmi X50 硬件 HEVC；无缝切集；播放页布局；注册设备修复 video_model 空包；媒体失败自动换源；移除打赏入口。",
   "published_at": "2026-10-27T12:27:00+08:00"
