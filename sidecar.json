@@ -1,1 +1,1 @@
-{"version":0,"arm64":{"url":"","sha256":""},"armv7":{"url":"","sha256":""}}
+{"version": 1, "arm64": {"url": "https://github.com/vibecode85/hongguo-tv-update/releases/download/sidecar-1/libhgsidecar-arm64.so", "sha256": "65b3496345664eddadcbdbc3b16bb4a07547a1a2b1863cbc6ea5b14817c63167"}, "armv7": {"url": "https://github.com/vibecode85/hongguo-tv-update/releases/download/sidecar-1/libhgsidecar-armv7.so", "sha256": "d422604625f7f22a83faa51c1554ad503f091f4c1aac005352c29f1301aac4ab"}}
