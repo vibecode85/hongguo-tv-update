@@ -1,0 +1,14 @@
+[package]
+name = "hgsidecar"
+version = "0.1.0"
+edition = "2021"
+
+# Clone the reference implementation into sidecar/extern/hongguo-desktop first:
+#   git clone --depth 1 https://github.com/it00021hot/hongguo-desktop sidecar/extern/hongguo-desktop
+# and apply sidecar/patches/0001-fetch-play-model.patch to it (see README).
+[dependencies]
+hongguo-api = { path = "extern/hongguo-desktop/crates/hongguo-api" }
+hongguo-signer = { path = "extern/hongguo-desktop/crates/hongguo-signer" }
+hongguo-common = { path = "extern/hongguo-desktop/crates/hongguo-common" }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"

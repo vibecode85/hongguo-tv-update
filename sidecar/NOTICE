@@ -1,0 +1,19 @@
+# hongguo sidecar
+
+This crate is a thin CLI around the reference implementation
+[it00021hot/hongguo-desktop](https://github.com/it00021hot/hongguo-desktop)
+(crates `hongguo-signer`, `hongguo-api`), which is licensed under the
+**PolyForm Noncommercial License 1.0.0** (noncommercial use only; keep this
+notice when redistributing).
+
+The Go core keeps download / CENC decryption / range proxy / player handoff and
+only asks this sidecar for the official `video_model`; the existing
+`miniReelCompatibleModel` then applies the official `fallback_api`
+(`codec_type=1` → HEVC) when the model is bytevc2-only.
+
+Build (requires rustc >= 1.99, the cloned reference workspace and the NDK):
+
+    cargo build --release --target aarch64-linux-android
+    cargo build --release --target armv7-linux-androideabi
+
+then copy the binaries to `android/app/src/main/jniLibs/<abi>/libhgsidecar.so`.

@@ -1,0 +1,68 @@
+name: sidecar
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect upstream change
+        id: up
+        run: |
+          set -e
+          SHA=$(curl -fsSL https://api.github.com/repos/it00021hot/hongguo-desktop/commits/main | python3 -c 'import json,sys;print(json.load(sys.stdin)["sha"])')
+          OLD=$(cat sidecar/upstream.txt 2>/dev/null || echo none)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          if [ "$SHA" = "$OLD" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build sidecar
+        if: steps.up.outputs.changed == 'true'
+        run: |
+          set -e
+          rustup target add aarch64-linux-android armv7-linux-androideabi
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" >/dev/null
+          rm -rf sidecar/extern && mkdir -p sidecar/extern
+          git clone --depth 1 https://github.com/it00021hot/hongguo-desktop sidecar/extern/hongguo-desktop
+          python3 sidecar/apply_patch.py
+          export NDK="$ANDROID_HOME/ndk/27.2.12479018"
+          TOOL="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cd sidecar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOL/aarch64-linux-android23-clang" AR="$TOOL/llvm-ar" CC_aarch64_linux_android="$TOOL/aarch64-linux-android23-clang" \
+            cargo build --release --target aarch64-linux-android
+          CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER="$TOOL/armv7a-linux-androideabi23-clang" AR="$TOOL/llvm-ar" CC_armv7_linux_androideabi="$TOOL/armv7a-linux-androideabi23-clang" \
+            cargo build --release --target armv7-linux-androideabi
+          "$TOOL/llvm-strip" target/aarch64-linux-android/release/hgprobe target/armv7-linux-androideabi/release/hgprobe
+          mkdir -p ../out
+          cp target/aarch64-linux-android/release/hgprobe ../out/libhgsidecar-arm64.so
+          cp target/armv7-linux-androideabi/release/hgprobe ../out/libhgsidecar-armv7.so
+      - name: Publish release and manifest
+        if: steps.up.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          V=$(python3 -c 'import json;print(json.load(open("sidecar.json"))["version"]+1)' 2>/dev/null || echo 1)
+          gh release create "sidecar-$V" out/libhgsidecar-arm64.so out/libhgsidecar-armv7.so -t "sidecar $V" -n "auto build from upstream ${{ steps.up.outputs.sha }}"
+          SHA64=$(sha256sum out/libhgsidecar-arm64.so | cut -d' ' -f1)
+          SHA7=$(sha256sum out/libhgsidecar-armv7.so | cut -d' ' -f1)
+          python3 - "$V" "$SHA64" "$SHA7" <<'PY'
+          import json, sys
+          v, a64, a7 = sys.argv[1], sys.argv[2], sys.argv[3]
+          base = f"https://github.com/vibecode85/hongguo-tv-update/releases/download/sidecar-{v}"
+          data = {"version": int(v), "arm64": {"url": base + "/libhgsidecar-arm64.so", "sha256": a64},
+                  "armv7": {"url": base + "/libhgsidecar-armv7.so", "sha256": a7}}
+          open('sidecar.json', 'w').write(json.dumps(data) + "\n")
+          PY
+          echo "${{ steps.up.outputs.sha }}" > sidecar/upstream.txt
+          git config user.name "sidecar-bot"
+          git config user.email "sidecar-bot@users.noreply.github.com"
+          git add sidecar.json sidecar/upstream.txt
+          git commit -m "sidecar: auto build $V" || true
+          git push
