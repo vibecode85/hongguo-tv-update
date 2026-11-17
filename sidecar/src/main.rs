@@ -1,21 +1,39 @@
-//! Line-oriented sidecar for the Go core: one JSON request per line in,
-//! one JSON response per line out. It signs with the current official client
+//! Line-oriented sidecar for the Go core: one JSON request per line in, one
+//! JSON response per line out. It signs with the current official client
 //! generation (MetaSec v5 + Medusa v5) and returns the raw `video_model`
 //! so the Go core keeps its own codec/fallback logic.
 
 use std::io::{BufRead, Write};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use hongguo_api::client::ApiEnv;
 use hongguo_api::play_url::fetch_play_model;
 use serde_json::{json, Value};
 
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 async fn make_env() -> Result<ApiEnv, String> {
     let cdid = hongguo_signer::fresh_cdid();
-    let mut env = ApiEnv::anonymous(Default::default());
-    env.device = hongguo_signer::anonymous_profile(&cdid);
-    let reg = hongguo_api::register::register_device(&env)
-        .await
-        .map_err(|e| format!("register: {e:?}"))?;
+    let mut env = ApiEnv {
+        proxy: Default::default(),
+        device: hongguo_signer::anonymous_profile(&cdid),
+        cookie: None,
+        x_tt_token: None,
+    };
+    let material = hongguo_api::register::RegisterMaterial::mint();
+    let reg = hongguo_api::register::register_material(
+        &env,
+        &material,
+        hongguo_api::register::REGISTER_ORIGIN,
+        now_millis(),
+    )
+    .await
+    .map_err(|e| format!("register: {e:?}"))?;
     env.device.set("device_id", &reg.device_id);
     env.device.set("iid", &reg.install_id);
     if !reg.cdid.is_empty() {
@@ -24,7 +42,10 @@ async fn make_env() -> Result<ApiEnv, String> {
     if !reg.openudid.is_empty() {
         env.device.set("openudid", &reg.openudid);
     }
-    eprintln!("registered device={} iid={} cdid={}", reg.device_id, reg.install_id, reg.cdid);
+    eprintln!(
+        "registered device={} iid={} cdid={}",
+        reg.device_id, reg.install_id, reg.cdid
+    );
     Ok(env)
 }
 
@@ -53,16 +74,22 @@ async fn main() {
                 continue;
             }
         };
-        let vid = request.get("vid").and_then(Value::as_str).unwrap_or("").to_string();
+        let vid = request
+            .get("vid")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         if vid.is_empty() {
             let _ = writeln!(out, "{}", json!({"ok": false, "error": "missing vid"}));
             let _ = out.flush();
             continue;
         }
-        let content_type = request.get("content_type").and_then(Value::as_u64).unwrap_or(1004) as i64;
+        let content_type = request
+            .get("content_type")
+            .and_then(Value::as_u64)
+            .unwrap_or(1004) as i64;
         match fetch_play_model(&vid, content_type, &env).await {
             Ok(model) => {
-                // Field order is irrelevant; serde_json sorts keys.
                 let payload = json!({"ok": true, "model": model.to_string()});
                 let _ = writeln!(out, "{payload}");
             }

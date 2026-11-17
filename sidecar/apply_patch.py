@@ -23,6 +23,8 @@ p = root / "crates/hongguo-api/src/play_url.rs"
 s = p.read_text()
 if "pub async fn fetch_play_model" not in s:
     anchor = "/// 单集取流（`/novel/player/video_model/v1/`）。"
+    if anchor not in s:
+        anchor = ""
     add = '''/// 取单集的原始 `video_model`（含 `video_list` / `fallback_api`）。
 pub async fn fetch_play_model(
     vid: &str,
@@ -52,6 +54,6 @@ pub async fn fetch_play_model(
 }
 
 '''
-    s = s.replace(anchor, add + anchor, 1)
+    s = s.replace(anchor, add + anchor, 1) if anchor else s + "\n" + add
     p.write_text(s)
 print("patched reference crate")
