@@ -3,25 +3,85 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild even when the signing generation is unchanged"
+        type: boolean
+        default: false
+  push:
+    paths:
+      - "sidecar/src/**"
+      - "sidecar/Cargo.toml"
+      - "sidecar/apply_patch.py"
+      - ".github/workflows/sidecar.yml"
 permissions:
   contents: write
+concurrency:
+  group: sidecar
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Detect upstream change
+
+      # The sidecar exists to carry the *signing generation* of the official
+      # client. Upstream's desktop UI releases do not change it, so rebuild only
+      # when the generation actually moves: the upstream signing/api/material
+      # trees, or our own sidecar source. Desktop-only commits are ignored.
+      - name: Detect signing-generation change
         id: up
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          SHA=$(curl -fsSL https://api.github.com/repos/it00021hot/hongguo-desktop/commits/main | python3 -c 'import json,sys;print(json.load(sys.stdin)["sha"])')
-          OLD=$(cat sidecar/upstream.txt 2>/dev/null || echo none)
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          if [ "$SHA" = "$OLD" ]; then
+          python3 - <<'PY' > generation.txt
+          import hashlib, json, os, pathlib, urllib.request
+
+          upstream = "https://api.github.com/repos/it00021hot/hongguo-desktop"
+          paths = ("crates/hongguo-signer", "crates/hongguo-api", "assets/metasec")
+          headers = {
+              "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+              "Accept": "application/vnd.github+json",
+              "User-Agent": "hongguo-tv-update-ci",
+          }
+
+          def get(url):
+              request = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          head = get(upstream + "/commits/main")["sha"]
+          tree = get(f"{upstream}/git/trees/{head}?recursive=1")["tree"]
+          entries = sorted(
+              [e["path"], e["sha"]]
+              for e in tree
+              if any(e["path"] == p or e["path"].startswith(p + "/") for p in paths)
+          )
+
+          local = []
+          for pattern in ("sidecar/src/**/*.rs", "sidecar/Cargo.toml", "sidecar/apply_patch.py"):
+              for path in sorted(pathlib.Path(".").glob(pattern)):
+                  local.append([str(path), hashlib.sha256(path.read_bytes()).hexdigest()])
+
+          payload = {"upstream": entries, "local": sorted(local)}
+          generation = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+          print(f"{generation} {head}")
+          PY
+          GEN=$(cut -d' ' -f1 generation.txt)
+          SHA=$(cut -d' ' -f2 generation.txt)
+          OLD=$(cut -d' ' -f1 sidecar/upstream.txt 2>/dev/null || true)
+          echo "generation=$GEN upstream=$SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$GEN" = "$OLD" ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "signing generation unchanged ($GEN); skipping rebuild" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
+            echo "signing generation changed: ${OLD:-none} -> $GEN" | tee -a "$GITHUB_STEP_SUMMARY"
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+          echo "gen=$GEN" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
       - name: Build sidecar
         if: steps.up.outputs.changed == 'true'
         run: |
@@ -30,6 +90,8 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" >/dev/null
           rm -rf sidecar/extern && mkdir -p sidecar/extern
           git clone --depth 1 https://github.com/it00021hot/hongguo-desktop sidecar/extern/hongguo-desktop
+          git -C sidecar/extern/hongguo-desktop fetch --depth 1 origin "${{ steps.up.outputs.sha }}"
+          git -C sidecar/extern/hongguo-desktop checkout -q FETCH_HEAD
           python3 sidecar/apply_patch.py
           export NDK="$ANDROID_HOME/ndk/27.2.12479018"
           TOOL="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
@@ -42,27 +104,38 @@ jobs:
           mkdir -p ../out
           cp target/aarch64-linux-android/release/hgsidecar ../out/libhgsidecar-arm64.so
           cp target/armv7-linux-androideabi/release/hgsidecar ../out/libhgsidecar-armv7.so
+
       - name: Publish release and manifest
         if: steps.up.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          V=$(python3 -c 'import json;print(json.load(open("sidecar.json"))["version"]+1)' 2>/dev/null || echo 1)
-          gh release create "sidecar-$V" out/libhgsidecar-arm64.so out/libhgsidecar-armv7.so -t "sidecar $V" -n "auto build from upstream ${{ steps.up.outputs.sha }}"
+          LAST=$(gh release list --limit 100 --json tagName \
+            --jq '[.[].tagName | select(startswith("sidecar-")) | ltrimstr("sidecar-") | tonumber] | max // 0')
+          V=$((LAST + 1))
+          gh release create "sidecar-$V" out/libhgsidecar-arm64.so out/libhgsidecar-armv7.so \
+            -t "sidecar $V" -n "generation ${{ steps.up.outputs.gen }} from upstream ${{ steps.up.outputs.sha }}"
           SHA64=$(sha256sum out/libhgsidecar-arm64.so | cut -d' ' -f1)
           SHA7=$(sha256sum out/libhgsidecar-armv7.so | cut -d' ' -f1)
-          python3 - "$V" "$SHA64" "$SHA7" <<'PY'
+          APP=$(grep -m1 'pub const APP_VERSION_CODE' sidecar/extern/hongguo-desktop/crates/hongguo-signer/src/device.rs \
+            | grep -o '[0-9]\+' || true)
+          python3 - "$V" "$SHA64" "$SHA7" "${{ steps.up.outputs.gen }}" "$APP" <<'PY'
           import json, sys
-          v, a64, a7 = sys.argv[1], sys.argv[2], sys.argv[3]
-          base = f"https://github.com/vibecode85/hongguo-tv-update/releases/download/sidecar-{v}"
-          data = {"version": int(v), "arm64": {"url": base + "/libhgsidecar-arm64.so", "sha256": a64},
-                  "armv7": {"url": base + "/libhgsidecar-armv7.so", "sha256": a7}}
-          open('sidecar.json', 'w').write(json.dumps(data) + "\n")
+          version, a64, a7, generation, app = sys.argv[1:6]
+          base = f"https://github.com/vibecode85/hongguo-tv-update/releases/download/sidecar-{version}"
+          data = {
+              "version": int(version),
+              "generation": generation,
+              "app_version_code": int(app) if app else None,
+              "arm64": {"url": base + "/libhgsidecar-arm64.so", "sha256": a64},
+              "armv7": {"url": base + "/libhgsidecar-armv7.so", "sha256": a7},
+          }
+          open("sidecar.json", "w").write(json.dumps(data) + "\n")
           PY
-          echo "${{ steps.up.outputs.sha }}" > sidecar/upstream.txt
+          echo "${{ steps.up.outputs.gen }} ${{ steps.up.outputs.sha }}" > sidecar/upstream.txt
           git config user.name "sidecar-bot"
           git config user.email "sidecar-bot@users.noreply.github.com"
           git add sidecar.json sidecar/upstream.txt
-          git commit -m "sidecar: auto build $V" || true
+          git commit -m "sidecar: auto build $V (generation ${{ steps.up.outputs.gen }})" || true
           git push
