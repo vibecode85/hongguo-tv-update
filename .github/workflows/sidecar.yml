@@ -118,8 +118,8 @@ jobs:
             -t "sidecar $V" -n "generation ${{ steps.up.outputs.gen }} from upstream ${{ steps.up.outputs.sha }}"
           SHA64=$(sha256sum out/libhgsidecar-arm64.so | cut -d' ' -f1)
           SHA7=$(sha256sum out/libhgsidecar-armv7.so | cut -d' ' -f1)
-          APP=$(grep -m1 'pub const APP_VERSION_CODE' sidecar/extern/hongguo-desktop/crates/hongguo-signer/src/device.rs \
-            | grep -o '[0-9]\+' || true)
+          APP=$(sed -n 's/.*APP_VERSION_CODE: u64 = \([0-9][0-9]*\).*/\1/p' \
+            sidecar/extern/hongguo-desktop/crates/hongguo-signer/src/device.rs | head -1)
           python3 - "$V" "$SHA64" "$SHA7" "${{ steps.up.outputs.gen }}" "$APP" <<'PY'
           import json, sys
           version, a64, a7, generation, app = sys.argv[1:6]
