@@ -49,8 +49,6 @@ async fn make_env() -> Result<ApiEnv, String> {
     Ok(env)
 }
 
-#[tokio::main]
-async 
 fn comment_json(item: &hongguo_api::danmaku::CommentItem) -> Value {
     json!({
         "id": item.comment_id,
@@ -79,7 +77,8 @@ fn reply_json(item: &hongguo_api::danmaku::ReplyItem) -> Value {
     })
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let env = match make_env().await {
         Ok(env) => env,
         Err(e) => {
