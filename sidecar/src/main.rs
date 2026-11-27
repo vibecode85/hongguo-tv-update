@@ -166,6 +166,36 @@ async fn main() {
             let _ = out.flush();
             continue;
         }
+        // Ranking: the request parameters and the cell_view parsing live in the
+        // reference crate; the whole page (items + selector tabs) is returned as
+        // JSON for the Go host to shape into its list model.
+        if request.get("task").and_then(Value::as_str) == Some("rank") {
+            let req = hongguo_api::rank::RankReq {
+                selected: request.get("selected").and_then(Value::as_str).unwrap_or(""),
+                sub: request.get("sub").and_then(Value::as_str).unwrap_or(""),
+                panel: request.get("panel").and_then(Value::as_str),
+                background: request.get("background").and_then(Value::as_str),
+                offset: request.get("offset").and_then(Value::as_i64).unwrap_or(0),
+                session_id: request.get("session_id").and_then(Value::as_str).unwrap_or(""),
+                rank_version: request.get("rank_version").and_then(Value::as_str).unwrap_or(""),
+            };
+            match hongguo_api::rank::fetch_rank_ex(req, &call_env).await {
+                Ok(page) => {
+                    let payload = json!({
+                        "ok": true,
+                        "task": "rank",
+                        "page": serde_json::to_value(&page).unwrap_or(Value::Null)
+                    });
+                    let _ = writeln!(out, "{payload}");
+                }
+                Err(e) => {
+                    let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("{e:?}")}));
+                }
+            }
+            let _ = out.flush();
+            continue;
+        }
+
         // Comments (one page) and replies (one page) for the discussion panel.
         // Read-only and stateless, like danmaku.
         if matches!(
