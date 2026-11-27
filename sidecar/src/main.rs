@@ -50,7 +50,36 @@ async fn make_env() -> Result<ApiEnv, String> {
 }
 
 #[tokio::main]
-async fn main() {
+async 
+fn comment_json(item: &hongguo_api::danmaku::CommentItem) -> Value {
+    json!({
+        "id": item.comment_id,
+        "text": item.text,
+        "user_id": item.user_id,
+        "user_name": item.user_name,
+        "avatar": item.avatar,
+        "created": item.create_time,
+        "likes": item.digg_count,
+        "replies": item.reply_count,
+        "liked": item.user_digg,
+        "score": item.score,
+        "score_suffix": item.score_suffix_text
+    })
+}
+
+fn reply_json(item: &hongguo_api::danmaku::ReplyItem) -> Value {
+    json!({
+        "id": item.reply_id,
+        "text": item.text,
+        "user_id": item.user_id,
+        "user_name": item.user_name,
+        "avatar": item.avatar,
+        "created": item.create_time,
+        "likes": item.digg_count
+    })
+}
+
+fn main() {
     let env = match make_env().await {
         Ok(env) => env,
         Err(e) => {
@@ -138,6 +167,57 @@ async fn main() {
             let _ = out.flush();
             continue;
         }
+        // Comments (one page) and replies (one page) for the discussion panel.
+        // Read-only and stateless, like danmaku.
+        if matches!(
+            request.get("task").and_then(Value::as_str),
+            Some("comments") | Some("replies")
+        ) {
+            let task = request.get("task").and_then(Value::as_str).unwrap_or("comments");
+            let group_id = request.get("vid").and_then(Value::as_str).unwrap_or("");
+            let book_id = request.get("series_id").and_then(Value::as_str).unwrap_or("");
+            let comment_id = request.get("comment_id").and_then(Value::as_str).unwrap_or("");
+            let cursor = request.get("cursor").and_then(Value::as_str).unwrap_or("");
+            if group_id.is_empty() || book_id.is_empty() {
+                let _ = writeln!(out, "{}", json!({"ok": false, "error": "missing vid/series_id"}));
+                let _ = out.flush();
+                continue;
+            }
+            let payload = if task == "comments" {
+                match hongguo_api::danmaku::fetch_comments_page(group_id, book_id, cursor, &call_env).await {
+                    Ok(page) => {
+                        let items: Vec<Value> = page.items.iter().map(comment_json).collect();
+                        json!({
+                            "ok": true,
+                            "task": "comments",
+                            "items": items,
+                            "total": page.total,
+                            "has_more": page.has_more,
+                            "cursor": page.next_cursor
+                        })
+                    }
+                    Err(e) => json!({"ok": false, "error": format!("{e:?}")}),
+                }
+            } else {
+                match hongguo_api::danmaku::fetch_comment_replies(group_id, book_id, comment_id, cursor, &call_env).await {
+                    Ok(page) => {
+                        let items: Vec<Value> = page.items.iter().map(reply_json).collect();
+                        json!({
+                            "ok": true,
+                            "task": "replies",
+                            "items": items,
+                            "has_more": page.has_more,
+                            "cursor": page.next_cursor
+                        })
+                    }
+                    Err(e) => json!({"ok": false, "error": format!("{e:?}")}),
+                }
+            };
+            let _ = writeln!(out, "{payload}");
+            let _ = out.flush();
+            continue;
+        }
+
         // Danmaku windows: commentapi with comment_type=20, one window per call.
         // The parameter shape moves with the official client, so it lives here
         // (sidecar.json) instead of the Go core.
