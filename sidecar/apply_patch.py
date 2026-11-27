@@ -69,3 +69,11 @@ pub async fn fetch_play_model(
     s = s.replace(anchor, add + anchor, 1) if anchor else s + "\n" + add
     p.write_text(s)
 print("patched reference crate")
+
+# One comment page is 100 rows instead of the official 10: the TV list pages by
+# page size and 10 meant ten "more" presses for the same content. The server
+# accepts the larger count.
+p = root / "crates/hongguo-api/src/danmaku/comments.rs"
+s = p.read_text()
+s = replace_once(s, '"count": 10,', '"count": 100,')
+p.write_text(s)
