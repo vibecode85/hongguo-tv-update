@@ -1,22 +1,34 @@
-"""Expose the reference crate's playback helpers and add fetch_play_model."""
+"""Expose the reference crate's playback helpers and add fetch_play_model.
+
+Every rewrite is guarded so the patch is idempotent: the update-repo CI applies
+it to whatever upstream HEAD is that day, and upstream may already have made a
+helper public (a blind replace once produced "pub pub mod request;").
+"""
 import pathlib
 
 root = pathlib.Path(__file__).resolve().parent / "extern" / "hongguo-desktop"
 
+
+def replace_once(text, before, after):
+    return text.replace(before, after) if before in text else text
+
+
 p = root / "crates/hongguo-api/src/client.rs"
 s = p.read_text()
-s = s.replace("pub(crate) const SINFONLINEA_API_ORIGIN", "pub const SINFONLINEA_API_ORIGIN")
-s = s.replace("pub(crate) async fn api_call_playback_v5", "pub async fn api_call_playback_v5")
+s = replace_once(s, "pub(crate) const SINFONLINEA_API_ORIGIN", "pub const SINFONLINEA_API_ORIGIN")
+s = replace_once(s, "pub(crate) async fn api_call_playback_v5", "pub async fn api_call_playback_v5")
 p.write_text(s)
 
 p = root / "crates/hongguo-api/src/metasec/request.rs"
-s = p.read_text().replace("pub(crate) async fn sign_playback", "pub async fn sign_playback")
+s = p.read_text()
+s = replace_once(s, "pub(crate) async fn sign_playback", "pub async fn sign_playback")
 p.write_text(s)
 
 p = root / "crates/hongguo-api/src/metasec.rs"
-s = p.read_text().replace("mod request;", "pub mod request;").replace(
-    "pub(crate) use request::sign_playback;", "pub use request::sign_playback;"
-)
+s = p.read_text()
+if "pub mod request;" not in s:
+    s = replace_once(s, "mod request;", "pub mod request;")
+s = replace_once(s, "pub(crate) use request::sign_playback;", "pub use request::sign_playback;")
 p.write_text(s)
 
 p = root / "crates/hongguo-api/src/play_url.rs"
