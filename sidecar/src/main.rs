@@ -74,6 +74,21 @@ async fn main() {
                 continue;
             }
         };
+        // The Go host owns the account session; pass its cookie through so
+        // account-scoped fields (follow state, paywall) match the UI.
+        let cookie = request
+            .get("cookie")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let call_env = if cookie.is_empty() {
+            env.clone()
+        } else {
+            ApiEnv {
+                cookie: Some(cookie.to_string()),
+                ..env.clone()
+            }
+        };
+
         // Two tasks share this process: "episodes" pulls the official episode
         // table (numerical vids), everything else resolves one stream model.
         // Keeping the episode table here means an id/endpoint change shipped
@@ -89,7 +104,7 @@ async fn main() {
                 let _ = out.flush();
                 continue;
             }
-            match hongguo_api::detail::fetch_episode_list(&series_id, &env).await {
+            match hongguo_api::detail::fetch_episode_list(&series_id, &call_env).await {
                 Ok(list) => {
                     let episodes: Vec<Value> = list
                         .episodes
@@ -114,6 +129,84 @@ async fn main() {
                         "content_type": list.content_type,
                         "episodes": episodes
                     });
+                    let _ = writeln!(out, "{payload}");
+                }
+                Err(e) => {
+                    let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("{e:?}")}));
+                }
+            }
+            let _ = out.flush();
+            continue;
+        }
+        // Series detail: title/cover/intro/episodes/actors from the official
+        // app endpoints. Keeping it here means the web page is no longer part
+        // of any playback-critical path, and a change in these endpoints only
+        // needs a new sidecar (sidecar.json), not a new core.
+        if request.get("task").and_then(Value::as_str) == Some("detail") {
+            let series_id = request
+                .get("series_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if series_id.is_empty() {
+                let _ = writeln!(out, "{}", json!({"ok": false, "error": "missing series_id"}));
+                let _ = out.flush();
+                continue;
+            }
+            let list = hongguo_api::detail::fetch_episode_list(&series_id, &call_env).await;
+            let meta = hongguo_api::detail::fetch_series_meta(&series_id, &call_env).await.ok();
+            match list {
+                Ok(list) => {
+                    let episodes: Vec<Value> = list
+                        .episodes
+                        .iter()
+                        .map(|episode| {
+                            json!({
+                                "index": episode.vid_index,
+                                "vid": episode.vid,
+                                "duration": episode.duration
+                            })
+                        })
+                        .collect();
+                    let resolved = if list.series_id.is_empty() { series_id.clone() } else { list.series_id.clone() };
+                    let mut payload = json!({
+                        "ok": true,
+                        "task": "detail",
+                        "series_id": resolved,
+                        "title": list.title,
+                        "cover": list.cover,
+                        "content_type": list.content_type,
+                        "follow_count": list.followed_cnt,
+                        "episode_count": episodes.len(),
+                        "episodes": episodes
+                    });
+                    if let Some(meta) = meta {
+                        if !meta.title.is_empty() {
+                            payload["title"] = json!(meta.title);
+                        }
+                        if payload["cover"].as_str().unwrap_or("").is_empty() && !meta.cover.is_empty() {
+                            payload["cover"] = json!(meta.cover);
+                        }
+                        payload["intro"] = json!(meta.intro);
+                        payload["tags"] = json!(meta.tags);
+                        payload["play_count"] = json!(meta.play_cnt);
+                        payload["hot_score"] = json!(meta.hot_score);
+                        payload["update_frequency"] = json!(meta.update_frequency);
+                        payload["series_status"] = json!(meta.series_status);
+                        payload["episode_total_count"] = json!(meta.episode_total_cnt);
+                        let actors: Vec<Value> = meta
+                            .creators
+                            .iter()
+                            .map(|creator| {
+                                json!({
+                                    "id": creator.user_id,
+                                    "name": creator.name,
+                                    "avatar": creator.avatar
+                                })
+                            })
+                            .collect();
+                        payload["actors"] = json!(actors);
+                    }
                     let _ = writeln!(out, "{payload}");
                 }
                 Err(e) => {
