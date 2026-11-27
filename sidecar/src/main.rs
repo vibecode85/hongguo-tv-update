@@ -138,6 +138,52 @@ async fn main() {
             let _ = out.flush();
             continue;
         }
+        // Generic signed passthrough for the reading domain (history, progress,
+        // favorites, follows). The Go host keeps the flow and payloads; only
+        // signing/transport live here, so a signature generation change is a
+        // sidecar update, not an APK or core change.
+        if request.get("task").and_then(Value::as_str) == Some("reading") {
+            let path = request.get("path").and_then(Value::as_str).unwrap_or("");
+            if path.is_empty() {
+                let _ = writeln!(out, "{}", json!({"ok": false, "error": "missing path"}));
+                let _ = out.flush();
+                continue;
+            }
+            let method = request.get("method").and_then(Value::as_str).unwrap_or("GET").to_uppercase();
+            let query: Vec<(String, String)> = request
+                .get("query")
+                .and_then(Value::as_object)
+                .map(|map| {
+                    map.iter()
+                        .map(|(key, value)| {
+                            let text = value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string());
+                            (key.clone(), text)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let body = request.get("body").map(|value| value.to_string().into_bytes());
+            match hongguo_api::client::api_call_reading(
+                hongguo_api::client::SINFONLINEC_API_ORIGIN,
+                path,
+                body,
+                &query,
+                &call_env,
+            )
+            .await
+            {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes).to_string();
+                    let payload = json!({"ok": true, "status": 200, "body": text});
+                    let _ = writeln!(out, "{payload}");
+                }
+                Err(e) => {
+                    let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("{e:?}")}));
+                }
+            }
+            let _ = out.flush();
+            continue;
+        }
         // Series detail: title/cover/intro/episodes/actors from the official
         // app endpoints. Keeping it here means the web page is no longer part
         // of any playback-critical path, and a change in these endpoints only
