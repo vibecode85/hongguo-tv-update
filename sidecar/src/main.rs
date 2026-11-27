@@ -138,6 +138,55 @@ async fn main() {
             let _ = out.flush();
             continue;
         }
+        // Danmaku windows: commentapi with comment_type=20, one window per call.
+        // The parameter shape moves with the official client, so it lives here
+        // (sidecar.json) instead of the Go core.
+        if request.get("task").and_then(Value::as_str) == Some("danmaku") {
+            let group_id = request.get("vid").and_then(Value::as_str).unwrap_or("");
+            let book_id = request.get("series_id").and_then(Value::as_str).unwrap_or("");
+            if group_id.is_empty() || book_id.is_empty() {
+                let _ = writeln!(out, "{}", json!({"ok": false, "error": "missing vid/series_id"}));
+                let _ = out.flush();
+                continue;
+            }
+            let start = request.get("start").and_then(Value::as_u64).unwrap_or(0);
+            let duration = request.get("duration").and_then(Value::as_u64).unwrap_or(600_000);
+            let cursor = request.get("cursor").and_then(Value::as_str).unwrap_or("");
+            match hongguo_api::danmaku::fetch_danmaku_window_page(
+                group_id, book_id, start, duration, cursor, &call_env,
+            )
+            .await
+            {
+                Ok(page) => {
+                    let items: Vec<Value> = page
+                        .items
+                        .iter()
+                        .map(|d| {
+                            json!({
+                                "id": d.comment_id,
+                                "text": d.text,
+                                "offset_ms": d.offset_ms,
+                                "digg_count": d.digg_count
+                            })
+                        })
+                        .collect();
+                    let payload = json!({
+                        "ok": true,
+                        "task": "danmaku",
+                        "items": items,
+                        "has_more": page.has_more,
+                        "cursor": page.next_cursor
+                    });
+                    let _ = writeln!(out, "{payload}");
+                }
+                Err(e) => {
+                    let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("{e:?}")}));
+                }
+            }
+            let _ = out.flush();
+            continue;
+        }
+
         // Generic signed passthrough for the reading domain (history, progress,
         // favorites, follows). The Go host keeps the flow and payloads; only
         // signing/transport live here, so a signature generation change is a
